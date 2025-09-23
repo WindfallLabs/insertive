@@ -1,0 +1,8 @@
+{
+	"id": "insertive",
+	"name": "Insertive",
+	"description": "Insert named snippets.",
+	"author": "Garin Wally",
+	"version": "1.0.0",
+	"minAppVersion": "1.9.12"
+}

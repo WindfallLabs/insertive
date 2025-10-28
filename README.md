@@ -25,11 +25,11 @@ Store predefined text and then quickly paste it in with keybinds, the command pa
 
 Choose from the context menu (and assign [Lucide icons](https://lucide.dev/icons/)).  
 
-<img src="resources/contextmenu.png" width="375"></>  
+<img src="resources/contextmenu.png" width="375"/>  
 
 
 Choose from the Command Palette (hotkey assignable).  
-<img src="resources/command_palette.png" width="600"></>  
+<img src="resources/command_palette.png" width="600"/>  
 
 Similar snippets can be grouped together in their own submenu using the "Group" setting (e.g. "Examples" in the screenshot above).  
 

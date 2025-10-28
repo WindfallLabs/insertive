@@ -8,6 +8,7 @@ Store predefined text and then quickly paste it in with keybinds, the command pa
 ## Quick Start
 
 - Install (use [BRAT](https://github.com/TfTHacker/obsidian42-brat)) and enable the plugin
+  - Paste this url `https://github.com/WindfallLabs/insertive` and select the highest available version
 - Go to the Insertive settings and add a new snippet
 - Close the settings window and go to a note
 - Right-click, scroll over "Insertive" and click your named snippet

@@ -1,19 +1,20 @@
 /**
  * Insertive Plugin for Obsidian
  * 
- * A comprehensive text snippet management plugin that provides:
+ * A simple text snippet management plugin that provides:
  * - Dynamic snippet creation and management through settings interface
  * - Template support with {1}, {2}, etc. placeholders for selected text
- * - Multiple insertion methods: command palette, context menu, and modal search
+ * - Multiple insertion methods: command palette, keybinds, and context menu
  * - Custom Lucide icons for visual distinction
- * - Live icon preview during configuration
+ * - Group organization with submenu support
+ * - Search and drag-to-reorder functionality
  * 
  * @author Garin Wally
- * @version 1.0.0
+ * @version 1.0.0-beta.1
  * @license MIT
  */
 
-const { Plugin, Notice, SuggestModal, Setting, PluginSettingTab, Modal } = require('obsidian');
+const { Plugin, Notice, PluginSettingTab, Modal, Setting } = require('obsidian');
 
 // Plugin constants
 const CONSTANTS = {
@@ -28,9 +29,17 @@ const CONSTANTS = {
         icons: {
             "hello": "stamp",
             "greet": "hand"
+        },
+        groups: {
+            "hello": "",
+            "greet": ""
         }
     }
 };
+
+// DEBUG MODE - show non-warning/error notificaitions
+const DEBUG = false;
+
 
 /**
  * Utility functions for snippet validation and processing
@@ -210,7 +219,9 @@ class CommandManager {
                 const processedText = SnippetProcessor.processTemplate(snippetText, selectedText);
                 
                 editor.replaceSelection(processedText);
-                new Notice(`Inserted: ${snippetKey}`);
+                if(DEBUG){
+                    new Notice(`Inserted: ${snippetKey}`);
+                }
             }
         });
     }
@@ -249,7 +260,7 @@ class ContextMenuManager {
     }
 
     /**
-     * Add Insertive submenu to the editor context menu
+     * Add Insertive submenu to the editor context menu with group support
      * @param {Menu} menu - The Obsidian menu object
      * @param {Editor} editor - The current editor instance
      */
@@ -270,20 +281,34 @@ class ContextMenuManager {
             
             const submenu = item.setSubmenu();
             
-            // Add snippet items (sorted alphabetically)
-            snippetKeys.sort().forEach((key) => {
-                submenu.addItem((subitem) => {
-                    const icon = this.plugin.settings.icons?.[key] || CONSTANTS.DEFAULT_ICON;
-                    subitem.setTitle(key)
-                           .setIcon(icon)
-                           .onClick(() => {
-                               const selectedText = editor.getSelection();
-                               const snippetText = this.plugin.settings.snippets[key];
-                               const processedText = SnippetProcessor.processTemplate(snippetText, selectedText);
-                               
-                               editor.replaceSelection(processedText);
-                               new Notice(`Inserted: ${key}`);
-                           });
+            // Organize snippets by group (preserving order)
+            const groupedSnippets = this.organizeSnippetsByGroup(snippetKeys);
+            
+            // Add ungrouped snippets first (in settings order, not sorted)
+            if (groupedSnippets[''] && groupedSnippets[''].length > 0) {
+                groupedSnippets[''].forEach((key) => {
+                    this.addSnippetMenuItem(submenu, key, editor);
+                });
+                
+                // Add separator if there are also grouped snippets
+                const hasGroups = Object.keys(groupedSnippets).some(g => g !== '');
+                if (hasGroups) {
+                    submenu.addSeparator();
+                }
+            }
+            
+            // Add grouped snippets (groups sorted alphabetically, snippets in settings order)
+            const groups = Object.keys(groupedSnippets).filter(g => g !== '').sort();
+            groups.forEach((groupName) => {
+                submenu.addItem((groupItem) => {
+                    groupItem.setTitle(groupName).setIcon("folder");
+                    
+                    const groupSubmenu = groupItem.setSubmenu();
+                    
+                    // Add snippets in this group (in settings order, not sorted)
+                    groupedSnippets[groupName].forEach((key) => {
+                        this.addSnippetMenuItem(groupSubmenu, key, editor);
+                    });
                 });
             });
             
@@ -301,6 +326,49 @@ class ContextMenuManager {
     }
 
     /**
+     * Organize snippets by their group (preserving order within groups)
+     * @param {string[]} snippetKeys - Array of snippet keys in settings order
+     * @returns {Object} Object with group names as keys and arrays of snippet keys as values
+     */
+    organizeSnippetsByGroup(snippetKeys) {
+        const grouped = {};
+        
+        snippetKeys.forEach(key => {
+            const group = this.plugin.settings.groups?.[key] || '';
+            if (!grouped[group]) {
+                grouped[group] = [];
+            }
+            grouped[group].push(key);
+        });
+        
+        return grouped;
+    }
+
+    /**
+     * Add a single snippet menu item
+     * @param {Menu} menu - The menu to add the item to
+     * @param {string} key - The snippet key
+     * @param {Editor} editor - The editor instance
+     */
+    addSnippetMenuItem(menu, key, editor) {
+        menu.addItem((subitem) => {
+            const icon = this.plugin.settings.icons?.[key] || CONSTANTS.DEFAULT_ICON;
+            subitem.setTitle(key)
+                   .setIcon(icon)
+                   .onClick(() => {
+                       const selectedText = editor.getSelection();
+                       const snippetText = this.plugin.settings.snippets[key];
+                       const processedText = SnippetProcessor.processTemplate(snippetText, selectedText);
+                       
+                       editor.replaceSelection(processedText);
+                        if(DEBUG){
+                            new Notice(`Inserted: ${snippetKey}`);
+                        }
+                   });
+        });
+    }
+
+    /**
      * Clean up resources
      */
     destroy() {
@@ -309,67 +377,43 @@ class ContextMenuManager {
 }
 
 /**
- * Modal for selecting and inserting snippets via search
- * Provides fuzzy search through available snippets
+ * Confirmation modal for overwriting snippets
  */
-class TextInsertModal extends SuggestModal {
+class ConfirmModal extends Modal {
     /**
      * @param {object} app - Obsidian app instance
-     * @param {object} snippets - Object containing snippet key-value pairs
-     * @param {Editor} editor - The editor instance to insert into
+     * @param {string} message - The confirmation message
+     * @param {Function} onConfirm - Callback when confirmed
      */
-    constructor(app, snippets, editor) {
+    constructor(app, message, onConfirm) {
         super(app);
-        this.snippets = snippets;
-        this.editor = editor;
+        this.message = message;
+        this.onConfirm = onConfirm;
     }
 
-    /**
-     * Get suggestions based on user query with fuzzy matching
-     * @param {string} query - The search query
-     * @returns {Array<{key: string, value: string}>} Array of matching suggestions
-     */
-    getSuggestions(query) {
-        const snippetKeys = Object.keys(this.snippets);
-        const lowercaseQuery = query.toLowerCase();
-        
-        return snippetKeys
-            .filter(key => key.toLowerCase().includes(lowercaseQuery))
-            .map(key => ({
-                key: key,
-                value: this.snippets[key]
-            }));
-    }
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl('p', { text: this.message });
 
-    /**
-     * Render a suggestion item in the modal
-     * @param {{key: string, value: string}} suggestion - The suggestion object
-     * @param {HTMLElement} el - The element to render into
-     */
-    renderSuggestion(suggestion, el) {
-        el.createEl("div", { text: suggestion.key, cls: "suggestion-title" });
+        const buttonContainer = contentEl.createDiv('modal-button-container');
+        buttonContainer.style.cssText = 'display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;';
         
-        const previewText = suggestion.value.length > 50 
-            ? suggestion.value.substring(0, 50) + "..." 
-            : suggestion.value;
-            
-        el.createEl("small", { 
-            text: previewText,
-            cls: "suggestion-note"
+        buttonContainer.createEl('button', {
+            text: 'Cancel',
+            cls: 'mod-cancel'
+        }).addEventListener('click', () => this.close());
+
+        buttonContainer.createEl('button', {
+            text: 'Replace',
+            cls: 'mod-cta'
+        }).addEventListener('click', async () => {
+            this.close();
+            if (this.onConfirm) await this.onConfirm();
         });
     }
 
-    /**
-     * Handle selection of a suggestion with template processing
-     * @param {{key: string, value: string}} suggestion - The selected suggestion
-     * @param {Event} evt - The selection event
-     */
-    onChooseSuggestion(suggestion, evt) {
-        const selectedText = this.editor.getSelection();
-        const processedText = SnippetProcessor.processTemplate(suggestion.value, selectedText);
-        
-        this.editor.replaceSelection(processedText);
-        new Notice(`Inserted: ${suggestion.key}`);
+    onClose() {
+        this.contentEl.empty();
     }
 }
 
@@ -395,6 +439,7 @@ class EditSnippetModal extends Modal {
         this.key = originalKey;
         this.value = originalValue;
         this.icon = plugin.settings.icons?.[originalKey] || CONSTANTS.DEFAULT_ICON;
+        this.group = plugin.settings.groups?.[originalKey] || '';
         
         // UI elements for cleanup
         this.iconPreviewEl = null;
@@ -437,6 +482,17 @@ class EditSnippetModal extends Modal {
                 text.inputEl.cols = 50;
                 return text;
             });
+
+        // Group input
+        new Setting(contentEl)
+            .setName('Group')
+            .setDesc('Optional group name for organizing snippets in the context menu (leave empty for no group)')
+            .addText(text => text
+                .setPlaceholder('e.g., "Examples" or "Templates"')
+                .setValue(this.group)
+                .onChange((value) => {
+                    this.group = value;
+                }));
 
         // Icon input with live preview
         this.createIconInput(contentEl);
@@ -509,7 +565,7 @@ class EditSnippetModal extends Modal {
     }
 
     /**
-     * Handle saving the edited snippet with validation
+     * Handle saving the edited snippet with validation and atomic update
      */
     async handleSave() {
         if (!this.key || !this.value) {
@@ -524,23 +580,34 @@ class EditSnippetModal extends Modal {
                 new Notice(validation.message);
                 return;
             }
-            
-            // Remove old key if it changed
-            delete this.plugin.settings.snippets[this.originalKey];
-            if (this.plugin.settings.icons && this.plugin.settings.icons[this.originalKey]) {
-                delete this.plugin.settings.icons[this.originalKey];
+
+            // Check if new key already exists
+            if (this.plugin.settings.snippets[this.key]) {
+                new Notice(`Snippet "${this.key}" already exists. Choose a different key.`);
+                return;
             }
         }
-        
-        // Update snippet and icon
-        this.plugin.settings.snippets[this.key] = this.value;
-        if (!this.plugin.settings.icons) {
-            this.plugin.settings.icons = {};
-        }
-        this.plugin.settings.icons[this.key] = this.icon;
-        
+
+        // Create new settings object to avoid partial writes (atomic update)
+        const newSettings = { ...this.plugin.settings };
+        newSettings.snippets = { ...newSettings.snippets };
+        newSettings.icons = { ...newSettings.icons };
+        newSettings.groups = { ...newSettings.groups };
+
+        // Remove old key
+        delete newSettings.snippets[this.originalKey];
+        delete newSettings.icons[this.originalKey];
+        delete newSettings.groups[this.originalKey];
+
+        // Add new key
+        newSettings.snippets[this.key] = this.value;
+        newSettings.icons[this.key] = this.icon;
+        newSettings.groups[this.key] = this.group;
+
+        // Apply and save atomically
+        this.plugin.settings = newSettings;
         await this.plugin.saveSettings();
-        
+
         new Notice(`Updated snippet: ${this.key}`);
         this.close();
         this.settingTab.display();
@@ -574,6 +641,9 @@ class InsertiveSettingTab extends PluginSettingTab {
             key: '',
             value: ''
         };
+        
+        // Container for filtered snippet list
+        this.snippetsListContainer = null;
     }
 
     display() {
@@ -583,6 +653,9 @@ class InsertiveSettingTab extends PluginSettingTab {
         containerEl.createEl('h2', { text: 'Insertive Plugin Settings' });
         
         this.renderNewSnippetSection(containerEl);
+        
+        // Rebuild list container
+        this.snippetsListContainer = null;
         this.renderExistingSnippetsSection(containerEl);
     }
 
@@ -633,29 +706,141 @@ class InsertiveSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Render the section showing existing snippets
+     * Render the section showing existing snippets with search
      * @param {HTMLElement} containerEl - The container element
      */
     renderExistingSnippetsSection(containerEl) {
         containerEl.createEl('h3', { text: 'Existing Snippets' });
         
-        const snippetKeys = Object.keys(this.plugin.settings.snippets);
-        
-        if (snippetKeys.length === 0) {
-            containerEl.createEl('p', { text: 'No snippets configured yet.' });
+        // Search bar
+        let searchTerm = '';
+        new Setting(containerEl)
+            .setName('Search snippets')
+            .addText(text => text
+                .setPlaceholder('Filter by key or content...')
+                .onChange(value => {
+                    searchTerm = value.toLowerCase();
+                    this.filterAndDisplaySnippets(this.snippetsListContainer, searchTerm);
+                }));
+
+        // Container for filtered results
+        this.snippetsListContainer = containerEl.createDiv();
+        this.filterAndDisplaySnippets(this.snippetsListContainer, '');
+        this.enableDragToReorder(this.snippetsListContainer);
+    }
+
+    /**
+     * Filter and display snippets based on search term
+     * @param {HTMLElement} container - The container to render into
+     * @param {string} term - The search term
+     */
+    filterAndDisplaySnippets(container, term) {
+        container.empty();
+        const keys = Object.keys(this.plugin.settings.snippets);
+
+        if (keys.length === 0) {
+            container.createEl('p', { text: 'No snippets configured yet.' });
             return;
         }
 
-        // Add usage instructions
-        this.renderUsageInstructions(containerEl);
-        
-        // Render each snippet
-        snippetKeys.forEach(key => {
-            this.renderSnippetSetting(containerEl, key);
+        const filtered = term 
+            ? keys.filter(key => 
+                  key.toLowerCase().includes(term) || 
+                  this.plugin.settings.snippets[key].toLowerCase().includes(term)
+              )
+            : keys;
+
+        if (filtered.length === 0) {
+            container.createEl('p', { text: 'No snippets match your search.' });
+            return;
+        }
+
+        // Usage instructions (only if not searching)
+        if (!term) {
+            this.renderUsageInstructions(container);
+        }
+
+        filtered.forEach(key => this.renderSnippetSetting(container, key));
+
+        if (!term) {
+            this.renderHotkeyInstructions(container);
+        }
+    }
+
+    /**
+     * Enable drag-to-reorder functionality for snippets
+     * @param {HTMLElement} containerEl - The container element
+     */
+    enableDragToReorder(containerEl) {
+        let draggedItem = null;
+
+        containerEl.addEventListener('dragstart', (e) => {
+            const settingItem = e.target.closest('.setting-item');
+            if (!settingItem) return;
+            draggedItem = settingItem;
+            e.dataTransfer.effectAllowed = 'move';
+            settingItem.style.opacity = '0.5';
         });
-        
-        // Add hotkey setup instructions
-        this.renderHotkeyInstructions(containerEl);
+
+        containerEl.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        });
+
+        containerEl.addEventListener('dragenter', (e) => {
+            const target = e.target.closest('.setting-item');
+            if (target && target !== draggedItem) {
+                target.classList.add('drag-over');
+            }
+        });
+
+        containerEl.addEventListener('dragleave', (e) => {
+            const target = e.target.closest('.setting-item');
+            if (target) target.classList.remove('drag-over');
+        });
+
+        containerEl.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            const target = e.target.closest('.setting-item');
+            if (!target || !draggedItem || target === draggedItem) return;
+
+            target.classList.remove('drag-over');
+            draggedItem.style.opacity = '1';
+
+            const allItems = Array.from(containerEl.querySelectorAll('.setting-item'));
+            const fromIndex = allItems.indexOf(draggedItem);
+            const toIndex = allItems.indexOf(target);
+
+            if (fromIndex === toIndex) return;
+
+            // Reorder in settings
+            const keys = Object.keys(this.plugin.settings.snippets);
+            const [movedKey] = keys.splice(fromIndex, 1);
+            keys.splice(toIndex, 0, movedKey);
+
+            const newSnippets = {};
+            const newIcons = {};
+            const newGroups = {};
+            keys.forEach(k => {
+                newSnippets[k] = this.plugin.settings.snippets[k];
+                newIcons[k] = this.plugin.settings.icons[k];
+                newGroups[k] = this.plugin.settings.groups[k];
+            });
+
+            this.plugin.settings.snippets = newSnippets;
+            this.plugin.settings.icons = newIcons;
+            this.plugin.settings.groups = newGroups;
+
+            await this.plugin.saveSettings();
+            this.display(); // Refresh
+        });
+
+        containerEl.addEventListener('dragend', () => {
+            containerEl.querySelectorAll('.setting-item').forEach(el => {
+                el.style.opacity = '1';
+                el.classList.remove('drag-over');
+            });
+        });
     }
 
     /**
@@ -675,6 +860,7 @@ class InsertiveSettingTab extends PluginSettingTab {
      */
     renderSnippetSetting(containerEl, key) {
         const snippetValue = this.plugin.settings.snippets[key];
+        const snippetGroup = this.plugin.settings.groups?.[key] || '';
         const truncatedValue = snippetValue.length > 100 
             ? snippetValue.substring(0, 100) + "..." 
             : snippetValue;
@@ -682,6 +868,18 @@ class InsertiveSettingTab extends PluginSettingTab {
         const setting = new Setting(containerEl)
             .setName(key)
             .setDesc(truncatedValue);
+        
+        // Make the setting item draggable
+        setting.settingEl.setAttribute('draggable', 'true');
+        
+        // Add group information if it exists
+        if (snippetGroup) {
+            setting.descEl.createEl('br');
+            setting.descEl.createEl('small', { 
+                text: `Group: ${snippetGroup}`,
+                cls: 'mod-muted'
+            });
+        }
         
         // Add command information
         setting.descEl.createEl('br');
@@ -723,7 +921,7 @@ class InsertiveSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Handle adding a new snippet with validation
+     * Handle adding a new snippet with validation and overwrite confirmation
      */
     async handleAddSnippet() {
         const { key, value } = this.newSnippetForm;
@@ -740,24 +938,54 @@ class InsertiveSettingTab extends PluginSettingTab {
             return;
         }
 
-        // Check for existing key
+        // If key exists, ask for confirmation
         if (this.plugin.settings.snippets[key]) {
-            new Notice(`Snippet with key "${key}" already exists. It will be overwritten.`);
+            new ConfirmModal(this.app, 
+                `Snippet "${key}" already exists. Replace it?`,
+                async () => {
+                    await this.replaceSnippet(key, value);
+                }
+            ).open();
+            return;
         }
-        
-        // Add snippet and save
+
+        await this.addNewSnippet(key, value);
+    }
+
+    /**
+     * Add a brand new snippet (no overwrite)
+     * @param {string} key - The snippet key
+     * @param {string} value - The snippet value
+     */
+    async addNewSnippet(key, value) {
         this.plugin.settings.snippets[key] = value;
-        // Initialize icon if not exists
-        if (!this.plugin.settings.icons) {
-            this.plugin.settings.icons = {};
-        }
-        if (!this.plugin.settings.icons[key]) {
-            this.plugin.settings.icons[key] = CONSTANTS.DEFAULT_ICON;
-        }
+        if (!this.plugin.settings.icons) this.plugin.settings.icons = {};
+        this.plugin.settings.icons[key] = CONSTANTS.DEFAULT_ICON;
+        if (!this.plugin.settings.groups) this.plugin.settings.groups = {};
+        this.plugin.settings.groups[key] = '';
+
         await this.plugin.saveSettings();
         new Notice(`Added snippet: ${key}`);
-        
-        // Reset form and refresh display
+        this.resetAndRefresh();
+    }
+
+    /**
+     * Replace existing snippet
+     * @param {string} key - The snippet key
+     * @param {string} value - The snippet value
+     */
+    async replaceSnippet(key, value) {
+        this.plugin.settings.snippets[key] = value;
+        // Keep existing icon and group
+        await this.plugin.saveSettings();
+        new Notice(`Replaced snippet: ${key}`);
+        this.resetAndRefresh();
+    }
+
+    /**
+     * Reset form and refresh display
+     */
+    resetAndRefresh() {
         this.newSnippetForm = { key: '', value: '' };
         this.display();
     }
@@ -771,6 +999,10 @@ class InsertiveSettingTab extends PluginSettingTab {
         // Also delete the icon setting
         if (this.plugin.settings.icons && this.plugin.settings.icons[key]) {
             delete this.plugin.settings.icons[key];
+        }
+        // Also delete the group setting
+        if (this.plugin.settings.groups && this.plugin.settings.groups[key]) {
+            delete this.plugin.settings.groups[key];
         }
         await this.plugin.saveSettings();
         new Notice(`Deleted snippet: ${key}`);
@@ -812,20 +1044,11 @@ class InsertivePlugin extends Plugin {
     }
 
     /**
-     * Register all UI components (commands, settings tab, context menu)
+     * Register all UI components (settings tab and context menu)
      */
     registerUIComponents() {
         // Add settings tab
         this.addSettingTab(new InsertiveSettingTab(this.app, this));
-        
-        // Add main insert command (opens modal)
-        this.addCommand({
-            id: 'insert-text',
-            name: 'Insert Text',
-            editorCallback: (editor, view) => {
-                new TextInsertModal(this.app, this.settings.snippets, editor).open();
-            }
-        });
 
         // Register context menu handler
         this.registerEvent(
@@ -849,6 +1072,16 @@ class InsertivePlugin extends Plugin {
                 // Initialize icons for existing snippets
                 Object.keys(this.settings.snippets).forEach(key => {
                     this.settings.icons[key] = CONSTANTS.DEFAULT_ICON;
+                });
+                await this.saveData(this.settings);
+            }
+            
+            // Ensure groups object exists for backward compatibility
+            if (!this.settings.groups) {
+                this.settings.groups = {};
+                // Initialize groups for existing snippets (empty string = no group)
+                Object.keys(this.settings.snippets).forEach(key => {
+                    this.settings.groups[key] = '';
                 });
                 await this.saveData(this.settings);
             }

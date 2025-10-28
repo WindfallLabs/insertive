@@ -39,7 +39,15 @@ _NOTE: I do not intend to expand any more support for this feature._
 Insertive ships with a `greet` example snippet:
 Select a word (e.g. "Plankton") and choose the "greet" snippet to convert the selected word to "Hello Plankton (from Insertive)".
 
-Similarly, the `list-test` example snippet will convert multiple selected lines into a bulleted list.  
+Similarly, this `list-test` example snippet will convert 3 selected lines into a bulleted list.  
+
+Snippet Text:
+```
+Three-Item List Example
+- {1}
+- {2]
+- {3}
+```
 
 
 ## AI Use Disclosure
